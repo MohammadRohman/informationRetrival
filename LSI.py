@@ -121,6 +121,16 @@ class SearchForm(Form):
 def get_available_files():
     files = [f for f in os.listdir(MEDIA_ROOT) if os.path.isfile(os.path.join(MEDIA_ROOT, f))]
     return files
+def view_document(request, doc_name):
+    # Read the processed document content
+    file_path = os.path.join(MEDIA_ROOT, f"{doc_name}.processed")
+    document_content = ""
+    
+    if os.path.exists(file_path):
+        with open(file_path, 'r', encoding='utf-8') as f:
+            document_content = f.read()
+    
+    return render(request, 'document_view.html', {'document_content': document_content, 'doc_name': doc_name})
 
 def upload_view(request):
     # Ambil daftar file yang tersedia
@@ -174,6 +184,7 @@ def search_view(request):
 urlpatterns = [
     path('', upload_view, name='upload'),
     path('search/', search_view, name='search'),
+    path('view_document/<str:doc_name>/', view_document, name='view_document'),  # New URL for document view
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
 
 # Templates
@@ -223,16 +234,35 @@ SEARCH_TEMPLATE = '''
                 <ul>
                 {% for doc, similarity in results %}
                     <li class="mb-2">
-                        <div class="flex justify-between">
+                        <a href="{% url 'view_document' doc %}" class="flex justify-between text-blue-500 hover:underline"> <!-- Make results clickable -->
                             <span>{{ doc }}</span>
                             <span class="text-gray-600">{{ similarity|floatformat:4 }}</span>
-                        </div>
+                        </a>
                     </li>
                 {% endfor %}
                 </ul>
             </div>
             {% endif %}
             <a href="/" class="mt-4 inline-block text-blue-500">Upload New Document</a>
+        </div>
+    </div>
+</body>
+</html>
+'''
+
+DOCUMENT_VIEW_TEMPLATE = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Document Content</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-100">
+    <div class="container mx-auto px-4 py-8">
+        <div class="max-w-md mx-auto bg-white rounded-xl shadow-md overflow-hidden p-6">
+            <h2 class="text-2xl font-bold mb-4">{{ doc_name }} - Document Content</h2>
+            <p class="text-gray-700">{{ document_content }}</p>
+            <a href="/search" class="mt-4 inline-block text-blue-500">Back to Search</a>
         </div>
     </div>
 </body>
@@ -247,6 +277,8 @@ with open(os.path.join(BASE_DIR, 'templates', 'upload.html'), 'w') as f:
     f.write(UPLOAD_TEMPLATE)
 with open(os.path.join(BASE_DIR, 'templates', 'search.html'), 'w') as f:
     f.write(SEARCH_TEMPLATE)
+with open(os.path.join(BASE_DIR, 'templates', 'document_view.html'), 'w') as f:
+    f.write(DOCUMENT_VIEW_TEMPLATE)
 
 # Run server
 if __name__ == '__main__':
