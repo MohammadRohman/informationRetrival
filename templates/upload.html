@@ -1,0 +1,24 @@
+
+<!DOCTYPE html>
+<html lang="id">
+<meta charset="UTF-8"
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<head>
+    <title>Upload Document</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-100">
+    <div class="container mx-auto px-4 py-8">
+        <div class="max-w-md mx-auto bg-white rounded-xl shadow-md overflow-hidden p-6">
+            <h2 class="text-2xl font-bold mb-4">Upload Document</h2>
+            {% if message %}<p class="text-green-500 mb-4">{{ message }}</p>{% endif %}
+            <form method="post" enctype="multipart/form-data">
+                {% csrf_token %}
+                <div class="mb-4">{{ form.file }}</div>
+                <button type="submit" class="bg-green-500 text-white px-4 py-2 rounded hover:bg-blue-600">Upload</button>
+            </form>
+            <a href="/search" class="mt-4 inline-block text-blue-500">Go to Search</a>
+        </div>
+    </div>
+</body>
+</html>
