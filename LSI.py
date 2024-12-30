@@ -9,7 +9,7 @@ from django.core.files.storage import FileSystemStorage
 from django.forms import Form, FileField, CharField
 import nltk
 from nltk.corpus import stopwords
-from nltk.stem import PorterStemmer
+from Sastrawi.Stemmer.StemmerFactory import StemmerFactory
 from PyPDF2 import PdfReader
 from docx import Document
 import string
@@ -89,7 +89,8 @@ django.setup()
 nltk.download('stopwords')
 nltk.download('punkt')
 stop_words = set(stopwords.words('indonesian'))
-stemmer = PorterStemmer()
+factory = StemmerFactory()
+stemmer = factory.create_stemmer()
 
 def preprocess_text(text):
     text = text.lower()
@@ -101,19 +102,35 @@ def preprocess_text(text):
 def read_file(file):
     content = ""
     try:
-        if file.name.endswith('.txt'):
-            content = file.read().decode('utf-8')
-        elif file.name.endswith('.pdf'):
-            reader = PdfReader(file)
-            for page in reader.pages:
-                content += page.extract_text()
-        elif file.name.endswith('.docx'):
-            doc = Document(file)
-            content = "\n".join([p.text for p in doc.paragraphs])
-        else:
-            raise ValueError("Unsupported file type.")
+        if isinstance(file, str):  # If file is a path
+            if file.endswith('.txt'):
+                with open(file, 'r', encoding='utf-8') as f:
+                    content = f.read()
+            elif file.endswith('.pdf'):
+                from PyPDF2 import PdfReader
+                reader = PdfReader(file)
+                content = "".join([page.extract_text() for page in reader.pages])
+            elif file.endswith('.docx'):
+                from docx import Document
+                doc = Document(file)
+                content = "\n".join([p.text for p in doc.paragraphs])
+            else:
+                raise ValueError("Unsupported file type.")
+        else:  # If file is a file object
+            if file.name.endswith('.txt'):
+                content = file.read().decode('utf-8')
+            elif file.name.endswith('.pdf'):
+                from PyPDF2 import PdfReader
+                reader = PdfReader(file)
+                content = "".join([page.extract_text() for page in reader.pages])
+            elif file.name.endswith('.docx'):
+                from docx import Document
+                doc = Document(file)
+                content = "\n".join([p.text for p in doc.paragraphs])
+            else:
+                raise ValueError("Unsupported file type.")
     except Exception as e:
-        print(f"Error reading file {file.name}: {e}")
+        content = f"Error reading file: {e}"
     return content
 
 # Forms
@@ -130,16 +147,16 @@ def get_available_files():
 
 def view_document(request, doc_name):
     doc_name = os.path.basename(doc_name)
-    file_path = os.path.join(MEDIA_ROOT, f"{doc_name}.processed")
+    file_content = os.path.join(MEDIA_ROOT, doc_name)
+    # file_path = os.path.join(MEDIA_ROOT, f"{doc_name}.processed")
     count_path = os.path.join(MEDIA_ROOT, f"{doc_name}.count")
     stemming_path = os.path.join(MEDIA_ROOT, f"{doc_name}.stemming")
     document_content = ""
     word_count = 0
     stemming_content = []
-
-    if os.path.exists(file_path):
-        with open(file_path, 'r', encoding='utf-8') as f:
-            document_content = f.read()
+    
+    # read content file
+    document_content = read_file(file_content)
     
     if os.path.exists(count_path):
         with open(count_path, 'r', encoding='utf-8') as f:
