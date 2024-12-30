@@ -7,15 +7,17 @@ from django.shortcuts import render
 from django.http import HttpResponse
 from django.core.files.storage import FileSystemStorage
 from django.forms import Form, FileField, CharField
+import nltk
+from nltk.corpus import stopwords
+from nltk.stem import PorterStemmer
 from PyPDF2 import PdfReader
 from docx import Document
 import string
-from sastrawi.stopwords import StopWordRemoverFactory
-from sastrawi.stemmer import Stemmer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.decomposition import TruncatedSVD
 from sklearn.metrics.pairwise import cosine_similarity
 import time
+from collections import Counter
 
 # Django settings
 DEBUG = True
@@ -83,18 +85,18 @@ settings.configure(
 import django
 django.setup()
 
-# Initialize Sastrawi components
-factory = StopWordRemoverFactory()
-stopword_remover = factory.create_stop_word_remover()
-stemmer = Stemmer()
+# Text processing setup
+nltk.download('stopwords')
+nltk.download('punkt')
+stop_words = set(stopwords.words('indonesian'))
+stemmer = PorterStemmer()
 
 def preprocess_text(text):
-    text = text.lower()  # Convert text to lowercase
-    text = text.translate(str.maketrans('', '', string.punctuation))  # Remove punctuation
-    tokens = text.split()  # Tokenize the text by whitespace
-    # Remove stopwords and apply stemming
-    filtered_tokens = [stemmer.stem(word) for word in tokens if stopword_remover.remove(word) != word]
-    return ' '.join(filtered_tokens), len(filtered_tokens), filtered_tokens  # Return processed text, word count, and list of stemmed words
+    text = text.lower()
+    tokens = nltk.word_tokenize(text.translate(str.maketrans('', '', string.punctuation)))
+    stemmed_tokens = [stemmer.stem(word) for word in tokens if word not in stop_words]
+    word_count = Counter(stemmed_tokens)
+    return ' '.join(stemmed_tokens), len(stemmed_tokens), word_count
 
 def read_file(file):
     content = ""
@@ -109,7 +111,7 @@ def read_file(file):
             doc = Document(file)
             content = "\n".join([p.text for p in doc.paragraphs])
         else:
-            raise ValueError("Unsupported file type.")  # You can add more conditions for other file types like .xlsx
+            raise ValueError("Unsupported file type.")
     except Exception as e:
         print(f"Error reading file {file.name}: {e}")
     return content
@@ -127,15 +129,13 @@ def get_available_files():
     return files
 
 def view_document(request, doc_name):
-    # Sanitize doc_name to prevent path traversal
     doc_name = os.path.basename(doc_name)
     file_path = os.path.join(MEDIA_ROOT, f"{doc_name}.processed")
     count_path = os.path.join(MEDIA_ROOT, f"{doc_name}.count")
-    stemming_path = os.path.join(MEDIA_ROOT, f"{doc_name}.stemming")  # Path for stemming result
+    stemming_path = os.path.join(MEDIA_ROOT, f"{doc_name}.stemming")
     document_content = ""
     word_count = 0
-    stemming_content = ""
-    stemmed_words = []
+    stemming_content = []
 
     if os.path.exists(file_path):
         with open(file_path, 'r', encoding='utf-8') as f:
@@ -143,19 +143,17 @@ def view_document(request, doc_name):
     
     if os.path.exists(count_path):
         with open(count_path, 'r', encoding='utf-8') as f:
-            word_count = int(f.read())  # Ensure this reads the word count correctly
+            word_count = int(f.read())
     
     if os.path.exists(stemming_path):
         with open(stemming_path, 'r', encoding='utf-8') as f:
-            stemming_content = f.read()  # Get stemming result
-            stemmed_words = stemming_content.split()  # Split the stemming content into words
+            stemming_content = f.readlines()
     
     return render(request, 'document_view.html', {
         'document_content': document_content,
         'doc_name': doc_name,
-        'word_count': word_count,  # Pass the word count to the template
-        'stemming_content': stemming_content,  # Send stemming result to template
-        'stemmed_words': stemmed_words  # Pass the list of stemmed words to the template
+        'word_count': word_count,
+        'stemming_content': stemming_content,
     })
 
 def upload_view(request):
@@ -168,27 +166,26 @@ def upload_view(request):
             fs = FileSystemStorage()
             fs.save(file.name, file)
 
-            # Read the file and process the content
             content = read_file(file)
+            processed_content, word_count, word_count_dict = preprocess_text(content)
 
-            # Update the unpacking from preprocess_text
-            processed_content, word_count, _ = preprocess_text(content)  # Get processed content, word count, and ignore stemmed words
-
-            # Save the processed content and word count
             with open(os.path.join(MEDIA_ROOT, f"{file.name}.processed"), 'w', encoding='utf-8') as f:
                 f.write(processed_content)
+
             with open(os.path.join(MEDIA_ROOT, f"{file.name}.count"), 'w', encoding='utf-8') as f:
                 f.write(str(word_count))
-            # Save the stemming result (if needed)
+
             with open(os.path.join(MEDIA_ROOT, f"{file.name}.stemming"), 'w', encoding='utf-8') as f:
-                f.write(processed_content)  # Save the stemming result (or stemmed words)
+                for word, count in word_count_dict.items():
+                    original_words = [token for token in nltk.word_tokenize(content) if stemmer.stem(token.lower()) == word]
+                    original_words_str = ', '.join(original_words)
+                    f.write(f"Kata Dasar: {word} ({count} kali) -> Asli: {original_words_str}\n")
 
             return render(request, 'upload.html', {'form': UploadForm(), 'message': 'File uploaded successfully!', 'available_files': available_files})
 
     return render(request, 'upload.html', {'form': UploadForm(), 'available_files': available_files})
 
 def search_view(request):
-    # Get available files
     available_files = get_available_files()
 
     if request.method == 'POST':
@@ -207,9 +204,8 @@ def search_view(request):
                 svd = TruncatedSVD(n_components=min(100, tfidf_matrix.shape[1]-1), random_state=42)
                 lsi_matrix = svd.fit_transform(tfidf_matrix)
                 
-                # Get all three values from preprocess_text
-                query_processed, _, _ = preprocess_text(query)  # Get processed text, word count, and list of stemmed words
-                query_tfidf = vectorizer.transform([query_processed])  # Use stemming result
+                query_processed, _, _ = preprocess_text(query)
+                query_tfidf = vectorizer.transform([query_processed])
                 query_lsi = svd.transform(query_tfidf)
                 
                 similarities = cosine_similarity(query_lsi, lsi_matrix)[0]
@@ -222,9 +218,8 @@ def search_view(request):
 urlpatterns = [
     path('', upload_view, name='upload'),
     path('search/', search_view, name='search'),
-    path('view_document/<str:doc_name>/', view_document, name='view_document'),  # New URL for document view
+    path('view_document/<str:doc_name>/', view_document, name='view_document'),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
-
 # Templates
 UPLOAD_TEMPLATE = '''
 <!DOCTYPE html>
@@ -306,11 +301,11 @@ DOCUMENT_VIEW_TEMPLATE = '''
             </div>
 
             <div class="mb-4 p-4 border border-gray-300 rounded-lg bg-gray-50">
-                <h3 class="text-lg font-semibold">Stemmed Words:</h3>
+                 <h3 class="text-lg font-semibold">Stemmed Words:</h3>
                 <div class="bg-gray-100 p-4 rounded">
                     <ul>
-                        {% for word in stemmed_words %}
-                            <li class="text-gray-700">{{ word }}</li>
+                        {% for line in stemming_content %}
+                        <li class="text-gray-700">{{ line }}</li>
                         {% endfor %}
                     </ul>
                 </div>
