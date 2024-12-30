@@ -6,18 +6,17 @@ from django.conf.urls.static import static
 from django.shortcuts import render
 from django.http import HttpResponse
 from django.core.files.storage import FileSystemStorage
-from django.db import models
 from django.forms import Form, FileField, CharField
-import numpy as np
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.decomposition import TruncatedSVD
-from sklearn.metrics.pairwise import cosine_similarity
 import nltk
 from nltk.corpus import stopwords
 from nltk.stem import PorterStemmer
 from PyPDF2 import PdfReader
 from docx import Document
 import string
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.decomposition import TruncatedSVD
+from sklearn.metrics.pairwise import cosine_similarity
+import time
 
 # Django settings
 DEBUG = True
@@ -92,22 +91,27 @@ stop_words = set(stopwords.words('indonesian'))
 stemmer = PorterStemmer()
 
 def preprocess_text(text):
-    text = text.lower()
-    tokens = nltk.word_tokenize(text.translate(str.maketrans('', '', string.punctuation)))
-    filtered_tokens = [stemmer.stem(word) for word in tokens if word not in stop_words]
-    return ' '.join(filtered_tokens)
+    text = text.lower()  # Convert text to lowercase
+    tokens = nltk.word_tokenize(text.translate(str.maketrans('', '', string.punctuation)))  # Tokenize the text
+    filtered_tokens = [stemmer.stem(word) for word in tokens if word not in stop_words]  # Stem the words
+    return ' '.join(filtered_tokens), len(filtered_tokens), filtered_tokens  # Return processed text, word count, and list of stemmed words
 
 def read_file(file):
     content = ""
-    if file.name.endswith('.txt'):
-        content = file.read().decode('utf-8')
-    elif file.name.endswith('.pdf'):
-        reader = PdfReader(file)
-        for page in reader.pages:
-            content += page.extract_text()
-    elif file.name.endswith('.docx'):
-        doc = Document(file)
-        content = "\n".join([p.text for p in doc.paragraphs])
+    try:
+        if file.name.endswith('.txt'):
+            content = file.read().decode('utf-8')
+        elif file.name.endswith('.pdf'):
+            reader = PdfReader(file)
+            for page in reader.pages:
+                content += page.extract_text()
+        elif file.name.endswith('.docx'):
+            doc = Document(file)
+            content = "\n".join([p.text for p in doc.paragraphs])
+        else:
+            raise ValueError("Unsupported file type.")  # You can add more conditions for other file types like .xlsx
+    except Exception as e:
+        print(f"Error reading file {file.name}: {e}")
     return content
 
 # Forms
@@ -121,19 +125,41 @@ class SearchForm(Form):
 def get_available_files():
     files = [f for f in os.listdir(MEDIA_ROOT) if os.path.isfile(os.path.join(MEDIA_ROOT, f))]
     return files
+
 def view_document(request, doc_name):
-    # Read the processed document content
+    # Sanitize doc_name to prevent path traversal
+    doc_name = os.path.basename(doc_name)
     file_path = os.path.join(MEDIA_ROOT, f"{doc_name}.processed")
+    count_path = os.path.join(MEDIA_ROOT, f"{doc_name}.count")
+    stemming_path = os.path.join(MEDIA_ROOT, f"{doc_name}.stemming")  # Path for stemming result
     document_content = ""
-    
+    word_count = 0
+    stemming_content = ""
+    stemmed_words = ""
+    []  # Initialize a list for stemmed words
+
     if os.path.exists(file_path):
         with open(file_path, 'r', encoding='utf-8') as f:
             document_content = f.read()
     
-    return render(request, 'document_view.html', {'document_content': document_content, 'doc_name': doc_name})
+    if os.path.exists(count_path):
+        with open(count_path, 'r', encoding='utf-8') as f:
+            word_count = int(f.read())  # Ensure this reads the word count correctly
+    
+    if os.path.exists(stemming_path):
+        with open(stemming_path, 'r', encoding='utf-8') as f:
+            stemming_content = f.read()  # Get stemming result
+            stemmed_words = stemming_content.split()  # Split the stemming content into words
+    
+    return render(request, 'document_view.html', {
+        'document_content': document_content,
+        'doc_name': doc_name,
+        'word_count': word_count,  # Pass the word count to the template
+        'stemming_content': stemming_content,  # Send stemming result to template
+        'stemmed_words': stemmed_words  # Pass the list of stemmed words to the template
+    })
 
 def upload_view(request):
-    # Ambil daftar file yang tersedia
     available_files = get_available_files()
 
     if request.method == 'POST':
@@ -142,16 +168,28 @@ def upload_view(request):
             file = request.FILES['file']
             fs = FileSystemStorage()
             fs.save(file.name, file)
+
+            # Read the file and process the content
             content = read_file(file)
-            processed_content = preprocess_text(content)
+
+            # Update the unpacking from preprocess_text
+            processed_content, word_count, _ = preprocess_text(content)  # Get processed content, word count, and ignore stemmed words
+
+            # Save the processed content and word count
             with open(os.path.join(MEDIA_ROOT, f"{file.name}.processed"), 'w', encoding='utf-8') as f:
                 f.write(processed_content)
-            # Setelah upload selesai, kirimkan daftar file yang tersedia ke template
+            with open(os.path.join(MEDIA_ROOT, f"{file.name}.count"), 'w', encoding='utf-8') as f:
+                f.write(str(word_count))
+            # Save the stemming result (if needed)
+            with open(os.path.join(MEDIA_ROOT, f"{file.name}.stemming"), 'w', encoding='utf-8') as f:
+                f.write(processed_content)  # Save the stemming result (or stemmed words)
+
             return render(request, 'upload.html', {'form': UploadForm(), 'message': 'File uploaded successfully!', 'available_files': available_files})
+
     return render(request, 'upload.html', {'form': UploadForm(), 'available_files': available_files})
 
 def search_view(request):
-    # Ambil daftar file yang tersedia
+    # Get available files
     available_files = get_available_files()
 
     if request.method == 'POST':
@@ -170,8 +208,9 @@ def search_view(request):
                 svd = TruncatedSVD(n_components=min(100, tfidf_matrix.shape[1]-1), random_state=42)
                 lsi_matrix = svd.fit_transform(tfidf_matrix)
                 
-                query_processed = preprocess_text(query)
-                query_tfidf = vectorizer.transform([query_processed])
+                # Get all three values from preprocess_text
+                query_processed, _, _ = preprocess_text(query)  # Get processed text, word count, and list of stemmed words
+                query_tfidf = vectorizer.transform([query_processed])  # Use stemming result
                 query_lsi = svd.transform(query_tfidf)
                 
                 similarities = cosine_similarity(query_lsi, lsi_matrix)[0]
@@ -197,7 +236,7 @@ UPLOAD_TEMPLATE = '''
 </head>
 <body class="bg-gray-100">
     <div class="container mx-auto px-4 py-8">
-        <div class="max-w-md mx-auto bg-white rounded-xl shadow-md overflow-hidden p-6">
+        <div class ="max-w-md mx-auto bg-white rounded-xl shadow-md overflow-hidden p-6">
             <h2 class="text-2xl font-bold mb-4">Upload Document</h2>
             {% if message %}<p class="text-green-500 mb-4">{{ message }}</p>{% endif %}
             <form method="post" enctype="multipart/form-data">
@@ -234,7 +273,7 @@ SEARCH_TEMPLATE = '''
                 <ul>
                 {% for doc, similarity in results %}
                     <li class="mb-2">
-                        <a href="{% url 'view_document' doc %}" class="flex justify-between text-blue-500 hover:underline"> <!-- Make results clickable -->
+                        <a href="{% url 'view_document' doc %}" class="flex justify-between text-blue-500 hover:underline">
                             <span>{{ doc }}</span>
                             <span class="text-gray-600">{{ similarity|floatformat:4 }}</span>
                         </a>
@@ -258,10 +297,25 @@ DOCUMENT_VIEW_TEMPLATE = '''
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
 </head>
 <body class="bg-gray-100">
-    <div class="container mx-auto px-4 py-8">
-        <div class="max-w-md mx-auto bg-white rounded-xl shadow-md overflow-hidden p-6">
+    <div class="container mx-auto px-12 py-24">
+        <div class="max-w-md mx-auto bg-white rounded-xl shadow-md overflow-hidden p-8">
             <h2 class="text-2xl font-bold mb-4">{{ doc_name }} - Document Content</h2>
-            <p class="text-gray-700">{{ document_content }}</p>
+            
+            <div class="mb-4 p-4 border border-gray-300 rounded-lg bg-gray-50">
+                <h3 class="text-lg font-semibold">Word Count (Stemmed):</h3>
+                <p class="text-gray-700">{{ word_count }}</p>
+            </div>
+
+            <div class="mb-4 p-4 border border-gray-300 rounded-lg bg-gray-50">
+                <h3 class="text-lg font-semibold">Stemmed Words:</h3>
+                <p class="text-gray-700">{{ stemmed_words|join:", " }}</p>
+            </div>
+
+            <div class="mt-4">
+                <h3 class="text-lg font-semibold">Document Content:</h3>
+                <p class="text-gray-700">{{ document_content }}</p>
+            </div>
+
             <a href="/search" class="mt-4 inline-block text-blue-500">Back to Search</a>
         </div>
     </div>

@@ -1,7 +1,6 @@
+
 <!DOCTYPE html>
-<html lang="id">
-    <meta charset="UTF-8"
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<html>
 <head>
     <title>Search Documents</title>
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
@@ -21,7 +20,7 @@
                 <ul>
                 {% for doc, similarity in results %}
                     <li class="mb-2">
-                        <a href="{% url 'view_document' doc %}" class="flex justify-between text-blue-500 hover:underline"> <!-- Make results clickable -->
+                        <a href="{% url 'view_document' doc %}" class="flex justify-between text-blue-500 hover:underline">
                             <span>{{ doc }}</span>
                             <span class="text-gray-600">{{ similarity|floatformat:4 }}</span>
                         </a>
