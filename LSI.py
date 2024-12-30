@@ -7,12 +7,11 @@ from django.shortcuts import render
 from django.http import HttpResponse
 from django.core.files.storage import FileSystemStorage
 from django.forms import Form, FileField, CharField
-import nltk
-from nltk.corpus import stopwords
-from nltk.stem import PorterStemmer
 from PyPDF2 import PdfReader
 from docx import Document
 import string
+from sastrawi.stopwords import StopWordRemoverFactory
+from sastrawi.stemmer import Stemmer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.decomposition import TruncatedSVD
 from sklearn.metrics.pairwise import cosine_similarity
@@ -84,16 +83,17 @@ settings.configure(
 import django
 django.setup()
 
-# Text processing setup
-nltk.download('stopwords')
-nltk.download('punkt')
-stop_words = set(stopwords.words('indonesian'))
-stemmer = PorterStemmer()
+# Initialize Sastrawi components
+factory = StopWordRemoverFactory()
+stopword_remover = factory.create_stop_word_remover()
+stemmer = Stemmer()
 
 def preprocess_text(text):
     text = text.lower()  # Convert text to lowercase
-    tokens = nltk.word_tokenize(text.translate(str.maketrans('', '', string.punctuation)))  # Tokenize the text
-    filtered_tokens = [stemmer.stem(word) for word in tokens if word not in stop_words]  # Stem the words
+    text = text.translate(str.maketrans('', '', string.punctuation))  # Remove punctuation
+    tokens = text.split()  # Tokenize the text by whitespace
+    # Remove stopwords and apply stemming
+    filtered_tokens = [stemmer.stem(word) for word in tokens if stopword_remover.remove(word) != word]
     return ' '.join(filtered_tokens), len(filtered_tokens), filtered_tokens  # Return processed text, word count, and list of stemmed words
 
 def read_file(file):
@@ -135,8 +135,7 @@ def view_document(request, doc_name):
     document_content = ""
     word_count = 0
     stemming_content = ""
-    stemmed_words = ""
-    []  # Initialize a list for stemmed words
+    stemmed_words = []
 
     if os.path.exists(file_path):
         with open(file_path, 'r', encoding='utf-8') as f:
@@ -308,7 +307,13 @@ DOCUMENT_VIEW_TEMPLATE = '''
 
             <div class="mb-4 p-4 border border-gray-300 rounded-lg bg-gray-50">
                 <h3 class="text-lg font-semibold">Stemmed Words:</h3>
-                <p class="text-gray-700">{{ stemmed_words|join:", " }}</p>
+                <div class="bg-gray-100 p-4 rounded">
+                    <ul>
+                        {% for word in stemmed_words %}
+                            <li class="text-gray-700">{{ word }}</li>
+                        {% endfor %}
+                    </ul>
+                </div>
             </div>
 
             <div class="mt-4">
